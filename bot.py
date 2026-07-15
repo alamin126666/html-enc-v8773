@@ -1,5 +1,4 @@
 import os
-import asyncio
 import threading
 import logging
 import tempfile
@@ -138,30 +137,28 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     pass
 
 
-# ─── Bot runner (separate asyncio loop in its own thread) ─
-
-async def _run_bot():
-    if not BOT_TOKEN:
-        logger.error("BOT_TOKEN is not set — bot will not start")
-        return
-    bot_app = Application.builder().token(BOT_TOKEN).build()
-    bot_app.add_handler(CommandHandler("start", cmd_start))
-    bot_app.add_handler(CommandHandler("help",  cmd_help))
-    bot_app.add_handler(MessageHandler(filters.Document.ALL, handle_file))
-    await bot_app.initialize()
-    await bot_app.start()
-    await bot_app.updater.start_polling(drop_pending_updates=True)
-    logger.info("Telegram bot polling started ✓")
-    await asyncio.Event().wait()   # run forever
-
+# ─── Bot runner ────────────────────────────────────────────
+# Uses run_polling() (high-level API) which:
+#   ✓ Manages its own event loop → works on Python 3.11/3.12/3.13/3.14
+#   ✓ Safe to call from a background thread (stop_signals=() disables
+#     OS signal handlers which only work in the main thread)
 
 def _bot_thread():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    if not BOT_TOKEN:
+        logger.error("BOT_TOKEN not set — bot will not start")
+        return
     try:
-        loop.run_until_complete(_run_bot())
+        bot_app = Application.builder().token(BOT_TOKEN).build()
+        bot_app.add_handler(CommandHandler("start", cmd_start))
+        bot_app.add_handler(CommandHandler("help",  cmd_help))
+        bot_app.add_handler(MessageHandler(filters.Document.ALL, handle_file))
+        logger.info("Telegram bot polling started ✓")
+        bot_app.run_polling(
+            drop_pending_updates=True,
+            stop_signals=(),      # ← required for non-main thread
+        )
     except Exception as e:
-        logger.error(f"Bot thread crashed: {e}")
+        logger.error(f"Bot thread crashed: {e}", exc_info=True)
 
 
 # ─── Entry point ───────────────────────────────────────
