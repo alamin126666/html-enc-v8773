@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: html-protector-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    plan: free
+    envVars:
+      - key: BOT_TOKEN
+        sync: false       # You will fill this in the Render dashboard
+      - key: PYTHON_VERSION
+        value: "3.11.0"
