@@ -254,6 +254,24 @@ try {
 } catch(e){}
 
 /* ──────────────────────────────────────────
+   TAB SWITCH DETECTION
+   যখন user অন্য tab-এ যায় → page hidden হয়
+   → সাথে সাথে blank করো
+   Kiwi DevTools নতুন tab-এ খুললেও catch হবে
+────────────────────────────────────────── */
+document.addEventListener('visibilitychange', function() {
+    if (document.hidden) _blank();
+});
+
+/* Window blur backup (for desktop DevTools popup windows) */
+window.addEventListener('blur', function() {
+    /* Small delay to avoid false positives on normal clicks */
+    setTimeout(function() {
+        if (document.hidden || !document.hasFocus()) _blank();
+    }, 150);
+});
+
+/* ──────────────────────────────────────────
    BLOCK RIGHT-CLICK
 ────────────────────────────────────────── */
 document.addEventListener('contextmenu', function(e) {
