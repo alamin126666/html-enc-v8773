@@ -37,33 +37,33 @@ def health():
 
 # ─── Messages ──────────────────────────────────────────
 WELCOME = (
-    "🛡️ *HTML Protector Bot*\n\n"
-    "আপনার `.html` ফাইল পাঠান — 3 লেয়ারে প্রোটেক্ট হবে:\n\n"
-    "🔒 *Layer 1* — HTML+CSS Minify & JS Obfuscation\n"
-    "🔐 *Layer 2* — Body XOR Encryption \\+ eval Self\\-Decode\n"
-    "🚫 *Layer 3* — DevTools Detection \\(60ms loop\\)\n"
-    "┣ F12 / Ctrl\\+Shift\\+I / Ctrl\\+U → blank page\n"
-    "┣ Eruda & vConsole \\(mobile\\) → blocked\n"
+    "🛡️ <b>HTML Protector Bot</b>\n\n"
+    "আপনার <code>.html</code> ফাইল পাঠান — 3 লেয়ারে প্রোটেক্ট হবে:\n\n"
+    "🔒 <b>Layer 1</b> — HTML+CSS Minify &amp; JS Obfuscation\n"
+    "🔐 <b>Layer 2</b> — Body XOR Encryption + eval Self-Decode\n"
+    "🚫 <b>Layer 3</b> — DevTools Detection (60ms loop)\n"
+    "┣ F12 / Ctrl+Shift+I / Ctrl+U → blank page\n"
+    "┣ Eruda &amp; vConsole (mobile) → blocked\n"
     "┗ Kiwi Browser → blocked\n\n"
-    "📎 একটি `.html` ফাইল পাঠিয়ে শুরু করুন\\!"
+    "📎 একটি <code>.html</code> ফাইল পাঠিয়ে শুরু করুন!"
 )
 
 DONE_CAPTION = (
-    "✅ *প্রোটেকশন সম্পন্ন\\!*\n\n"
-    "🔒 Layer 1 — Minify \\+ Obfuscate ✓\n"
-    "🔐 Layer 2 — XOR Encrypt \\+ eval Decode ✓\n"
+    "✅ <b>প্রোটেকশন সম্পন্ন!</b>\n\n"
+    "🔒 Layer 1 — Minify + Obfuscate ✓\n"
+    "🔐 Layer 2 — XOR Encrypt + eval Decode ✓\n"
     "🚫 Layer 3 — DevTools 60ms Detection ✓\n\n"
-    "_কেউ DevTools খুললেই blank page দেখবে_"
+    "<i>কেউ DevTools খুললেই blank page দেখবে</i>"
 )
 
 # ─── Handlers ──────────────────────────────────────────
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(WELCOME, parse_mode="MarkdownV2")
+    await update.message.reply_text(WELCOME, parse_mode="HTML")
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(WELCOME, parse_mode="MarkdownV2")
+    await update.message.reply_text(WELCOME, parse_mode="HTML")
 
 
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -119,7 +119,7 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 document=f,
                 filename=f"protected_{fname}",
                 caption=DONE_CAPTION,
-                parse_mode="MarkdownV2",
+                parse_mode="HTML",
             )
 
     except Exception as exc:
