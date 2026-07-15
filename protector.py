@@ -222,7 +222,7 @@ class HTMLProtector:
 
 var _gone = false;
 var _ua   = (navigator.userAgent || '').toLowerCase();
-var _th   = (_ua.indexOf('kiwi') !== -1) ? 100 : 160; // Kiwi browser = stricter threshold
+var _th   = (_ua.indexOf('kiwi') !== -1) ? 80 : 100;
 
 /* ──────────────────────────────────────────
    BLANK — nukes the page, broadcasts to
@@ -270,6 +270,21 @@ window.addEventListener('blur', function() {
         if (document.hidden || !document.hasFocus()) _blank();
     }, 150);
 });
+
+/* ──────────────────────────────────────────
+   PC DEVTOOLS — RESIZE OBSERVER
+   Browser menu দিয়ে DevTools খুললেই
+   viewport instantly ছোট হয় → catch করো
+   60ms loop-এর চেয়ে অনেক দ্রুত
+────────────────────────────────────────── */
+try {
+    new ResizeObserver(function() {
+        if (_gone) return;
+        var wDiff = window.outerWidth  - window.innerWidth;
+        var hDiff = window.outerHeight - window.innerHeight;
+        if (wDiff > _th || hDiff > _th) _blank();
+    }).observe(document.documentElement);
+} catch(e) {}
 
 /* ──────────────────────────────────────────
    BLOCK RIGHT-CLICK
