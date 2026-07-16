@@ -21,7 +21,10 @@ class HTMLProtector:
     """
 
     def __init__(self):
-        self._key = "".join(
+        self._key1 = "".join(
+            random.choices(string.ascii_letters + string.digits, k=32)
+        )
+        self._key2 = "".join(
             random.choices(string.ascii_letters + string.digits, k=32)
         )
 
@@ -59,6 +62,23 @@ class HTMLProtector:
         kb = key.encode("utf-8")
         enc = bytes([b ^ kb[i % len(kb)] for i, b in enumerate(tb)])
         return base64.b64encode(enc).decode("ascii")
+
+    @staticmethod
+    def _double_xor(text: str, key1: str, key2: str) -> str:
+        """
+        Double XOR encrypt:
+          pass1 = text  XOR key1  (byte-by-byte)
+          pass2 = pass1 XOR key2  (byte-by-byte)
+          → base64(pass2)
+        Decode: atob → XOR key2 → XOR key1 → original
+        Much harder to reverse than single XOR.
+        """
+        tb  = text.encode("utf-8")
+        kb1 = key1.encode("utf-8")
+        kb2 = key2.encode("utf-8")
+        p1  = bytes([b ^ kb1[i % len(kb1)] for i, b in enumerate(tb)])
+        p2  = bytes([b ^ kb2[i % len(kb2)] for i, b in enumerate(p1)])
+        return base64.b64encode(p2).decode("ascii")
 
     # ─── obfuscator.io engine (full settings) ───────────────
     def _obf_simple(self, js: str) -> str:
@@ -134,7 +154,7 @@ class HTMLProtector:
             "--compact",                           "true",
             "--self-defending",                    "true",
             "--string-array",                      "true",
-            "--string-array-encoding",             "base64",
+            "--string-array-encoding",             "rc4",   # RC4 >> base64
             "--string-array-threshold",            "1",
             "--string-array-calls-transform",      "true",
             "--string-array-rotate",               "true",
@@ -230,25 +250,45 @@ class HTMLProtector:
         h_inner = head_m.group(2) if head_m else ""
         h_close = head_m.group(3) if head_m else "</head>"
 
-        enc     = self._xor(b_inner, self._key)
-        key_b64 = self._b64(self._key)
+        # ── Double XOR encryption ──────────────────────────────
+        enc      = self._double_xor(b_inner, self._key1, self._key2)
+        k1_b64   = self._b64(self._key1)
+        k2_b64   = self._b64(self._key2)
 
-        vE,vK,vFn = self._rvar(), self._rvar(), self._rvar()
-        vB,vR,vI  = self._rvar(), self._rvar(), self._rvar()
-        vD,vSc    = self._rvar(), self._rvar()
-        vNs,vSi   = self._rvar(), self._rvar()
+        vE  = self._rvar()   # encrypted blob
+        vK1 = self._rvar()   # key 1
+        vK2 = self._rvar()   # key 2
+        vFn = self._rvar()   # decode function
+        vB  = self._rvar()   # bytes var
+        vP1 = self._rvar()   # pass-1 intermediate
+        vR  = self._rvar()   # result
+        vI  = self._rvar()   # loop index
+        vD  = self._rvar()   # decoded HTML
+        vSc = self._rvar()   # scripts list
+        vNs = self._rvar()   # new script el
+        vSi = self._rvar()   # script loop index
 
+        # JS decoder — reverses double XOR: key2 first, then key1
         decoder = (
             f"(function(){{"
+            # encrypted blob + two keys (stored as base64)
             f"var {vE}='{enc}';"
-            f"var {vK}=atob('{key_b64}');"
-            f"function {vFn}(d,k){{"
-            f"var {vB}=atob(d),{vR}='';"
+            f"var {vK1}=atob('{k1_b64}');"
+            f"var {vK2}=atob('{k2_b64}');"
+            # double XOR decode function
+            f"function {vFn}(d,k1,k2){{"
+            f"var {vB}=atob(d),{vP1}='',{vR}='';"
+            # reverse pass-2: XOR with key2
             f"for(var {vI}=0;{vI}<{vB}.length;{vI}++)"
-            f"{{{vR}+=String.fromCharCode({vB}.charCodeAt({vI})^k.charCodeAt({vI}%k.length));}}"
+            f"{{{vP1}+=String.fromCharCode({vB}.charCodeAt({vI})^k2.charCodeAt({vI}%k2.length));}}"
+            # reverse pass-1: XOR with key1
+            f"for(var {vI}=0;{vI}<{vP1}.length;{vI}++)"
+            f"{{{vR}+=String.fromCharCode({vP1}.charCodeAt({vI})^k1.charCodeAt({vI}%k1.length));}}"
             f"return {vR};}}"
-            f"var {vD}={vFn}({vE},{vK});"
+            # decode + inject via eval
+            f"var {vD}={vFn}({vE},{vK1},{vK2});"
             f"eval('document.body.innerHTML='+JSON.stringify({vD}));"
+            # re-execute any <script> tags in decoded body
             f"var {vSc}=document.body.querySelectorAll('script');"
             f"for(var {vSi}=0;{vSi}<{vSc}.length;{vSi}++){{"
             f"var {vNs}=document.createElement('script');"
