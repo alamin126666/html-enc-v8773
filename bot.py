@@ -2,6 +2,7 @@ import os
 import threading
 import logging
 import tempfile
+import subprocess
 
 from flask import Flask, jsonify
 from telegram import Update
@@ -24,6 +25,30 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ─── Auto-install javascript-obfuscator ────────────────
+def _ensure_js_obfuscator():
+    """Check & auto-install javascript-obfuscator npm package if missing."""
+    try:
+        r = subprocess.run(
+            ["javascript-obfuscator", "--version"],
+            capture_output=True, text=True, timeout=10
+        )
+        if r.returncode == 0:
+            logger.info(f"✓ javascript-obfuscator ready: {r.stdout.strip()}")
+            return
+    except FileNotFoundError:
+        pass
+
+    logger.info("⚙️  javascript-obfuscator not found — installing via npm...")
+    r = subprocess.run(
+        ["npm", "install", "-g", "javascript-obfuscator"],
+        capture_output=True, text=True, timeout=300
+    )
+    if r.returncode == 0:
+        logger.info("✓ javascript-obfuscator installed successfully")
+    else:
+        logger.error(f"✗ npm install failed:\n{r.stderr[:400]}")
+
 # ─── Flask (health / keep-alive for Render + cron-job) ─
 app = Flask(__name__)
 
@@ -38,22 +63,22 @@ def health():
 # ─── Messages ──────────────────────────────────────────
 WELCOME = (
     "🛡️ <b>HTML Protector Bot</b>\n\n"
-    "আপনার <code>.html</code> ফাইল পাঠান — 3 লেয়ারে প্রোটেক্ট হবে:\n\n"
+    "আপনার <code>.html</code> ফাইল পাঠান — <b>4 লেয়ারে</b> প্রোটেক্ট হবে:\n\n"
     "🔒 <b>Layer 1</b> — HTML+CSS Minify &amp; JS Obfuscation\n"
     "🔐 <b>Layer 2</b> — Body XOR Encryption + eval Self-Decode\n"
     "🚫 <b>Layer 3</b> — DevTools Detection (60ms loop)\n"
-    "┣ F12 / Ctrl+Shift+I / Ctrl+U → blank page\n"
-    "┣ Eruda &amp; vConsole (mobile) → blocked\n"
-    "┗ Kiwi Browser → blocked\n\n"
+    "🌐 <b>Layer 4</b> — Full HTML→base64→single &lt;script&gt; tag\n"
+    "┗ CSS সম্পূর্ণ hidden, শুধু একটা script tag থাকে\n\n"
     "📎 একটি <code>.html</code> ফাইল পাঠিয়ে শুরু করুন!"
 )
 
 DONE_CAPTION = (
-    "✅ <b>প্রোটেকশন সম্পন্ন!</b>\n\n"
-    "🔒 Layer 1 — Minify + Obfuscate ✓\n"
+    "✅ <b>4-Layer প্রোটেকশন সম্পন্ন!</b>\n\n"
+    "🔒 Layer 1 — Minify + obfuscator.io ✓\n"
     "🔐 Layer 2 — XOR Encrypt + eval Decode ✓\n"
-    "🚫 Layer 3 — DevTools 60ms Detection ✓\n\n"
-    "<i>কেউ DevTools খুললেই blank page দেখবে</i>"
+    "🚫 Layer 3 — DevTools 60ms Detection ✓\n"
+    "🌐 Layer 4 — Single &lt;script&gt; tag only ✓\n\n"
+    "<i>CSS, HTML structure সব hidden — শুধু একটা script tag দেখা যাবে</i>"
 )
 
 # ─── Handlers ──────────────────────────────────────────
@@ -164,7 +189,10 @@ def _bot_thread():
 # ─── Entry point ───────────────────────────────────────
 
 if __name__ == "__main__":
-    # Start bot in a daemon thread
+    # ── Auto-install javascript-obfuscator ──
+    _ensure_js_obfuscator()
+
+    # ── Start bot in background thread ──
     t = threading.Thread(target=_bot_thread, daemon=True)
     t.start()
     logger.info("Bot thread started ✓")
