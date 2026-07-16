@@ -324,9 +324,18 @@ class HTMLProtector:
         return r"""
 !function(){
 'use strict';
-var _gone=false;
-var _ua=(navigator.userAgent||'').toLowerCase();
-var _th=(_ua.indexOf('kiwi')!==-1)?80:100;
+var _gone   = false;
+var _ua     = (navigator.userAgent||'').toLowerCase();
+var _isKiwi = _ua.indexOf('kiwi')!==-1;
+var _isMob  = /android|iphone|ipad|ipod|mobile/.test(_ua) && !_isKiwi;
+/*
+  Threshold:
+  - Desktop       : 160px  (browser chrome ~79px, DevTools min ~200px)
+  - Kiwi mobile   : 80px   (DevTools tab detection)
+  - Regular mobile: N/A    (skip size check — browser chrome causes false positives)
+    Mobile Chrome address bar + nav bar ≈ 100-130px → would always trigger!
+*/
+var _th = _isKiwi ? 80 : 160;
 
 function _blank(){
 if(_gone)return;_gone=true;
@@ -340,42 +349,44 @@ try{(new BroadcastChannel('__shield__')).postMessage('nuke');}catch(e){}
 }
 
 try{var _bch=new BroadcastChannel('__shield__');_bch.onmessage=function(ev){if(ev.data==='nuke')_blank();};}catch(e){}
+
+/* Tab switch detection */
 document.addEventListener('visibilitychange',function(){if(document.hidden)_blank();});
 
-/* ── Window blur detection ──────────────────────────────────────────
-   সমস্যা: CSS blur animation / page load focus change → false blank
-   Fix:
-   1. প্রথম 2 সেকেন্ড blur ignore (CSS animation / page init)
-   2. 800ms grace period (focus ফিরে আসলে cancel)
-   3. শুধু document.hidden চেক (animation false positive বাদ দিতে)
-──────────────────────────────────────────────────────────────────── */
-var _startMs  = Date.now();
-var _blurTimer = null;
-
-window.addEventListener('blur', function() {
-    /* Skip: first 2s after page load (CSS animations / document.write init) */
-    if (Date.now() - _startMs < 2000) return;
-    clearTimeout(_blurTimer);
-    /* Only blank if page stays hidden for 800ms (real tab switch) */
-    _blurTimer = setTimeout(function() {
-        if (document.hidden) _blank();
-    }, 800);
+/* Blur detection (fixed: 2s startup + 800ms grace + no hasFocus false positive) */
+var _startMs=Date.now(),_blurTimer=null;
+window.addEventListener('blur',function(){
+if(Date.now()-_startMs<2000)return;
+clearTimeout(_blurTimer);
+_blurTimer=setTimeout(function(){if(document.hidden)_blank();},800);
 });
+window.addEventListener('focus',function(){clearTimeout(_blurTimer);_blurTimer=null;});
 
-window.addEventListener('focus', function() {
-    /* Focus returned → cancel pending blank */
-    clearTimeout(_blurTimer);
-    _blurTimer = null;
-});
+/*
+  Size detection — DESKTOP + KIWI ONLY
+  Regular mobile: SKIP (address bar + nav bar > threshold → false positive)
+*/
+function _chkSz(){
+if(_isMob)return; /* skip on regular mobile Chrome */
+if(window.outerWidth-window.innerWidth>_th||window.outerHeight-window.innerHeight>_th)_blank();
+}
 
+/* ResizeObserver — desktop + Kiwi only, with 1s startup delay */
+if(!_isMob){
+setTimeout(function(){
 try{
 new ResizeObserver(function(){
 if(_gone)return;
 if(window.outerWidth-window.innerWidth>_th||window.outerHeight-window.innerHeight>_th)_blank();
 }).observe(document.documentElement);
 }catch(e){}
+},1000);
+}
 
+/* Right-click block */
 document.addEventListener('contextmenu',function(e){e.preventDefault();e.stopPropagation();return false;},{capture:true,passive:false});
+
+/* Keyboard shortcuts block */
 document.addEventListener('keydown',function(e){
 var k=e.keyCode||e.which;
 if(k===123){e.preventDefault();_blank();return false;}
@@ -386,27 +397,45 @@ if((e.ctrlKey||e.metaKey)&&[85,83,80].indexOf(k)!==-1){e.preventDefault();_blank
 var _origLog=typeof console!=='undefined'?console.log.bind(console):function(){};
 var _origClear=typeof console!=='undefined'?console.clear.bind(console):function(){};
 
-function _chkSz(){if(window.outerWidth-window.innerWidth>_th||window.outerHeight-window.innerHeight>_th)_blank();}
+/*
+  Console getter trick — desktop + Kiwi only
+  Regular mobile Chrome: no DevTools console → getter never triggers → skip
+*/
 var _el=document.createElement('div');
 Object.defineProperty(_el,'id',{get:function(){if(!_gone){_gone=true;_blank();}}});
-function _chkCon(){try{_origLog(_el);_origClear();}catch(e){}}
+function _chkCon(){
+if(_isMob)return; /* no DevTools console on regular mobile */
+try{_origLog(_el);_origClear();}catch(e){}
+}
+
+/* Mobile DevTools detection — Eruda, vConsole */
 function _chkMob(){
 if(typeof eruda!=='undefined'||typeof VConsole!=='undefined'||typeof vconsole!=='undefined'||
 document.getElementById('eruda')||document.querySelector('.eruda-container')||
 document.querySelector('#__vconsole')||document.querySelector('[class*="eruda"]')||
 document.querySelector('[id*="vconsole"]'))_blank();
 }
-function _chkDbg(){var t=performance.now();(function(){debugger;})();if(performance.now()-t>100)_blank();}
 
+/* Debugger timing — desktop only */
+function _chkDbg(){
+if(_isMob)return;
+var t=performance.now();(function(){debugger;})();if(performance.now()-t>100)_blank();
+}
+
+/* Print block */
 window.addEventListener('beforeprint',function(e){e.preventDefault();_blank();},{passive:false});
 window.onbeforeprint=function(){_blank();};
+
+/* Anti-iframe */
 try{if(window!==window.top)window.top.location.replace(window.location.href);}catch(e){_blank();}
 
+/* Silence console */
 try{
 var _nop=function(){};
 ['log','warn','error','info','debug','dir','table','trace','assert','group','groupEnd','time','timeEnd'].forEach(function(m){try{console[m]=_nop;}catch(ex){}});
 }catch(e){}
 
+/* 60ms main loop */
 var _tick=0;
 setInterval(function(){
 if(_gone)return;
@@ -414,6 +443,7 @@ _chkSz();_chkCon();_chkMob();
 _tick++;if(_tick%100===0)_chkDbg();
 },60);
 
+/* Initial checks */
 function _init(){_chkSz();_chkMob();}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',_init);
 else _init();
