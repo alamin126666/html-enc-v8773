@@ -341,7 +341,32 @@ try{(new BroadcastChannel('__shield__')).postMessage('nuke');}catch(e){}
 
 try{var _bch=new BroadcastChannel('__shield__');_bch.onmessage=function(ev){if(ev.data==='nuke')_blank();};}catch(e){}
 document.addEventListener('visibilitychange',function(){if(document.hidden)_blank();});
-window.addEventListener('blur',function(){setTimeout(function(){if(document.hidden||!document.hasFocus())_blank();},150);});
+
+/* ── Window blur detection ──────────────────────────────────────────
+   সমস্যা: CSS blur animation / page load focus change → false blank
+   Fix:
+   1. প্রথম 2 সেকেন্ড blur ignore (CSS animation / page init)
+   2. 800ms grace period (focus ফিরে আসলে cancel)
+   3. শুধু document.hidden চেক (animation false positive বাদ দিতে)
+──────────────────────────────────────────────────────────────────── */
+var _startMs  = Date.now();
+var _blurTimer = null;
+
+window.addEventListener('blur', function() {
+    /* Skip: first 2s after page load (CSS animations / document.write init) */
+    if (Date.now() - _startMs < 2000) return;
+    clearTimeout(_blurTimer);
+    /* Only blank if page stays hidden for 800ms (real tab switch) */
+    _blurTimer = setTimeout(function() {
+        if (document.hidden) _blank();
+    }, 800);
+});
+
+window.addEventListener('focus', function() {
+    /* Focus returned → cancel pending blank */
+    clearTimeout(_blurTimer);
+    _blurTimer = null;
+});
 
 try{
 new ResizeObserver(function(){
