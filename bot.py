@@ -187,17 +187,18 @@ async def handle_doc(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f.write(protected)
             tmp_out = f.name
 
+        _base = fname.rsplit(".", 1)[0] if "." in fname else fname
         await msg.delete()
         with open(tmp_out, "rb") as f:
             await update.message.reply_document(
                 document=f,
-                filename=f"{fname.rsplit(".", 1)[0]}_obf.html",
+                filename=f"{_base}_obf.html",
                 caption=(
-                    "✅ <b>4-Layer Protection সম্পন্ন!</b>\n\n"
-                    "🔒 Layer 1 — Minify + RC4 Obfuscate ✓\n"
-                    "🔐 Layer 2 — Double XOR Encrypt ✓\n"
-                    "🚫 Layer 3 — DevTools Detection ✓\n"
-                    "🌐 Layer 4 — Single &lt;script&gt; tag ✓"
+                    "✅ <b>AES-256-CBC 5-Key Protection!</b>\n\n"
+                    "🔐 CSS + Body — AES-256-CBC × 5 keys ✓\n"
+                    "🔐 JS — AES-256-CBC × 5 keys ✓\n"
+                    "🚫 DevTools Detection ✓\n"
+                    "🌐 Single &lt;script&gt; tag (obfuscator.io RC4) ✓"
                 ),
                 parse_mode="HTML",
             )
