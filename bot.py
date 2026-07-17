@@ -4,19 +4,25 @@ import logging
 import tempfile
 import subprocess
 
+import httpx
 from flask import Flask, jsonify
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    Application, CommandHandler,
-    MessageHandler, filters, ContextTypes,
+    Application, CommandHandler, MessageHandler,
+    filters, ContextTypes, CallbackQueryHandler,
 )
 from protector import HTMLProtector
 
 # ─── Config ────────────────────────────────────────────
-BOT_TOKEN    = os.environ.get("BOT_TOKEN", "")
-PORT         = int(os.environ.get("PORT", 10000))
-MAX_FILE_MB  = 5
-MAX_BYTES    = MAX_FILE_MB * 1024 * 1024
+BOT_TOKEN   = os.environ.get("BOT_TOKEN", "")
+PORT        = int(os.environ.get("PORT", 10000))
+MAX_FILE_MB = 5
+MAX_BYTES   = MAX_FILE_MB * 1024 * 1024
+
+# ─── User states ───────────────────────────────────────
+ENC_MODE   = "enc"    # waiting for .html file
+FETCH_MODE = "fetch"  # waiting for URL
+# None = idle (buttons not pressed yet → ignore all input)
 
 # ─── Logging ───────────────────────────────────────────
 logging.basicConfig(
@@ -25,94 +31,112 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ─── Flask health server ───────────────────────────────
+flask_app = Flask(__name__)
+
+@flask_app.route("/")
+def root():
+    return "🛡️ HTML Protector Bot is running!", 200
+
+@flask_app.route("/health")
+def health():
+    return jsonify(status="ok"), 200
+
 # ─── Auto-install javascript-obfuscator ────────────────
 def _ensure_js_obfuscator():
-    """Check & auto-install javascript-obfuscator npm package if missing."""
     try:
         r = subprocess.run(
             ["javascript-obfuscator", "--version"],
             capture_output=True, text=True, timeout=10
         )
         if r.returncode == 0:
-            logger.info(f"✓ javascript-obfuscator ready: {r.stdout.strip()}")
+            logger.info(f"✓ javascript-obfuscator: {r.stdout.strip()}")
             return
     except FileNotFoundError:
         pass
-
-    logger.info("⚙️  javascript-obfuscator not found — installing via npm...")
+    logger.info("⚙️  Installing javascript-obfuscator via npm...")
     r = subprocess.run(
         ["npm", "install", "-g", "javascript-obfuscator"],
         capture_output=True, text=True, timeout=300
     )
     if r.returncode == 0:
-        logger.info("✓ javascript-obfuscator installed successfully")
+        logger.info("✓ javascript-obfuscator installed")
     else:
-        logger.error(f"✗ npm install failed:\n{r.stderr[:400]}")
+        logger.error(f"✗ npm install failed: {r.stderr[:400]}")
 
-# ─── Flask (health / keep-alive for Render + cron-job) ─
-app = Flask(__name__)
+# ─── UI helpers ────────────────────────────────────────
+def _main_kb():
+    """Main inline keyboard — shown on /start and after each action."""
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("🔒 HTML ENC",  callback_data="btn_enc"),
+        InlineKeyboardButton("🌐 HTML FECH", callback_data="btn_fetch"),
+    ]])
 
-@app.route("/")
-def root():
-    return "🛡️ HTML Protector Bot is running!", 200
-
-@app.route("/health")
-def health():
-    return jsonify(status="ok"), 200
-
-# ─── Messages ──────────────────────────────────────────
 WELCOME = (
     "🛡️ <b>HTML Protector Bot</b>\n\n"
-    "আপনার <code>.html</code> ফাইল পাঠান — <b>4 লেয়ারে</b> প্রোটেক্ট হবে:\n\n"
-    "🔒 <b>Layer 1</b> — HTML+CSS Minify &amp; JS Obfuscation\n"
-    "🔐 <b>Layer 2</b> — Body XOR Encryption + eval Self-Decode\n"
-    "🚫 <b>Layer 3</b> — DevTools Detection (60ms loop)\n"
-    "🌐 <b>Layer 4</b> — Full HTML→base64→single &lt;script&gt; tag\n"
-    "┗ CSS সম্পূর্ণ hidden, শুধু একটা script tag থাকে\n\n"
-    "📎 একটি <code>.html</code> ফাইল পাঠিয়ে শুরু করুন!"
+    "নিচের বাটন থেকে কাজ বেছে নিন:\n\n"
+    "🔒 <b>HTML ENC</b> — HTML ফাইল 4-layer encrypt করুন\n"
+    "🌐 <b>HTML FECH</b> — URL থেকে HTML নামিয়ে নিন"
 )
 
-DONE_CAPTION = (
-    "✅ <b>4-Layer প্রোটেকশন সম্পন্ন!</b>\n\n"
-    "🔒 Layer 1 — Minify + obfuscator.io ✓\n"
-    "🔐 Layer 2 — XOR Encrypt + eval Decode ✓\n"
-    "🚫 Layer 3 — DevTools 60ms Detection ✓\n"
-    "🌐 Layer 4 — Single &lt;script&gt; tag only ✓\n\n"
-    "<i>CSS, HTML structure সব hidden — শুধু একটা script tag দেখা যাবে</i>"
-)
-
-# ─── Handlers ──────────────────────────────────────────
-
+# ─── /start & /help ────────────────────────────────────
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(WELCOME, parse_mode="HTML")
-
+    context.user_data.clear()          # reset any previous state
+    await update.message.reply_text(
+        WELCOME, parse_mode="HTML", reply_markup=_main_kb()
+    )
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(WELCOME, parse_mode="HTML")
+    await cmd_start(update, context)
 
+# ─── Button handler ────────────────────────────────────
+async def btn_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
 
-async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if query.data == "btn_enc":
+        context.user_data["state"] = ENC_MODE
+        await query.edit_message_text(
+            "🔒 <b>HTML Encryption Mode</b>\n\n"
+            "আপনার <code>.html</code> ফাইল পাঠান:",
+            parse_mode="HTML",
+        )
+
+    elif query.data == "btn_fetch":
+        context.user_data["state"] = FETCH_MODE
+        await query.edit_message_text(
+            "🌐 <b>HTML Fetch Mode</b>\n\n"
+            "Website URL পাঠান:\n"
+            "<code>https://example.com</code>",
+            parse_mode="HTML",
+        )
+
+# ─── HTML ENC handler ──────────────────────────────────
+async def handle_doc(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Accept .html file ONLY when user clicked [ HTML ENC ]"""
+    if context.user_data.get("state") != ENC_MODE:
+        return   # button not pressed → silent ignore
+
     doc   = update.message.document
-    fname = doc.file_name or "file"
+    fname = doc.file_name or "file.html"
 
-    # ── Validation ──
     if not fname.lower().endswith(".html"):
         await update.message.reply_text(
-            "❌ শুধু `.html` ফাইল পাঠান।"
+            "❌ শুধু <code>.html</code> ফাইল পাঠান।",
+            parse_mode="HTML"
         )
         return
 
     if doc.file_size and doc.file_size > MAX_BYTES:
         await update.message.reply_text(
-            f"❌ ফাইল সাইজ {MAX_FILE_MB}MB এর বেশি হওয়া যাবে না।"
+            f"❌ ফাইল {MAX_FILE_MB}MB এর বেশি হওয়া যাবে না।"
         )
         return
 
-    msg = await update.message.reply_text("⏳ প্রোসেস হচ্ছে…")
-
+    msg = await update.message.reply_text("⏳ Encrypting...")
     tmp_in = tmp_out = None
+
     try:
-        # ── Download ──
         tg_file = await context.bot.get_file(doc.file_id)
         with tempfile.NamedTemporaryFile(
             suffix=".html", delete=False, mode="wb"
@@ -127,28 +151,38 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.edit_text("❌ ফাইলটি খালি বা অনেক ছোট!")
             return
 
-        # ── Protect ──
         protected = HTMLProtector().protect(html)
 
-        # ── Write output ──
         with tempfile.NamedTemporaryFile(
-            suffix="_protected.html", delete=False, mode="w", encoding="utf-8"
+            suffix="_protected.html", delete=False,
+            mode="w", encoding="utf-8"
         ) as f:
             f.write(protected)
             tmp_out = f.name
 
-        # ── Send ──
         await msg.delete()
         with open(tmp_out, "rb") as f:
             await update.message.reply_document(
                 document=f,
                 filename=f"protected_{fname}",
-                caption=DONE_CAPTION,
+                caption=(
+                    "✅ <b>4-Layer Protection সম্পন্ন!</b>\n\n"
+                    "🔒 Layer 1 — Minify + RC4 Obfuscate ✓\n"
+                    "🔐 Layer 2 — Double XOR Encrypt ✓\n"
+                    "🚫 Layer 3 — DevTools Detection ✓\n"
+                    "🌐 Layer 4 — Single &lt;script&gt; tag ✓"
+                ),
                 parse_mode="HTML",
             )
 
+        # reset state → show buttons again
+        context.user_data.clear()
+        await update.message.reply_text(
+            "আরো কিছু করতে চান?", reply_markup=_main_kb()
+        )
+
     except Exception as exc:
-        logger.exception("Error processing file")
+        logger.exception("Encryption error")
         try:
             await msg.edit_text(f"❌ Error: {str(exc)[:300]}")
         except Exception:
@@ -161,13 +195,81 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except OSError:
                     pass
 
+# ─── HTML FECH handler ─────────────────────────────────
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Accept URL ONLY when user clicked [ HTML FECH ]"""
+    if context.user_data.get("state") != FETCH_MODE:
+        return   # button not pressed → silent ignore
 
-# ─── Bot runner ────────────────────────────────────────────
-# Uses run_polling() (high-level API) which:
-#   ✓ Manages its own event loop → works on Python 3.11/3.12/3.13/3.14
-#   ✓ Safe to call from a background thread (stop_signals=() disables
-#     OS signal handlers which only work in the main thread)
+    url = update.message.text.strip()
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
 
+    msg = await update.message.reply_text("⏳ Fetching...")
+    tmp_path = None
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=30,
+            follow_redirects=True,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                )
+            },
+        ) as client:
+            resp = await client.get(url)
+
+        html   = resp.text
+        domain = url.replace("https://", "").replace("http://", "").split("/")[0]
+        fname  = f"{domain}.html"
+
+        with tempfile.NamedTemporaryFile(
+            suffix=".html", delete=False, mode="w", encoding="utf-8"
+        ) as f:
+            f.write(html)
+            tmp_path = f.name
+
+        await msg.delete()
+        with open(tmp_path, "rb") as f:
+            await update.message.reply_document(
+                document=f,
+                filename=fname,
+                caption=(
+                    f"✅ <b>HTML Fetched!</b>\n\n"
+                    f"🌐 <code>{url[:80]}</code>\n"
+                    f"📊 Size: {len(html):,} bytes\n"
+                    f"📡 Status: {resp.status_code}"
+                ),
+                parse_mode="HTML",
+            )
+
+        # reset state → show buttons again
+        context.user_data.clear()
+        await update.message.reply_text(
+            "আরো কিছু করতে চান?", reply_markup=_main_kb()
+        )
+
+    except httpx.TimeoutException:
+        await msg.edit_text("❌ Timeout — URL টি সময়মতো respond করেনি।")
+    except httpx.InvalidURL:
+        await msg.edit_text("❌ Invalid URL — সঠিক URL দিন।")
+    except Exception as exc:
+        logger.exception("Fetch error")
+        try:
+            await msg.edit_text(f"❌ Error: {str(exc)[:300]}")
+        except Exception:
+            pass
+    finally:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+# ─── Bot runner ────────────────────────────────────────
 def _bot_thread():
     if not BOT_TOKEN:
         logger.error("BOT_TOKEN not set — bot will not start")
@@ -176,27 +278,21 @@ def _bot_thread():
         bot_app = Application.builder().token(BOT_TOKEN).build()
         bot_app.add_handler(CommandHandler("start", cmd_start))
         bot_app.add_handler(CommandHandler("help",  cmd_help))
-        bot_app.add_handler(MessageHandler(filters.Document.ALL, handle_file))
-        logger.info("Telegram bot polling started ✓")
-        bot_app.run_polling(
-            drop_pending_updates=True,
-            stop_signals=(),      # ← required for non-main thread
+        bot_app.add_handler(CallbackQueryHandler(btn_handler))
+        bot_app.add_handler(MessageHandler(filters.Document.ALL, handle_doc))
+        bot_app.add_handler(
+            MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text)
         )
-    except Exception as e:
-        logger.error(f"Bot thread crashed: {e}", exc_info=True)
-
+        logger.info("✓ Bot polling started")
+        bot_app.run_polling(drop_pending_updates=True, stop_signals=())
+    except Exception as exc:
+        logger.error(f"Bot thread error: {exc}", exc_info=True)
 
 # ─── Entry point ───────────────────────────────────────
-
 if __name__ == "__main__":
-    # ── Auto-install javascript-obfuscator ──
     _ensure_js_obfuscator()
 
-    # ── Start bot in background thread ──
     t = threading.Thread(target=_bot_thread, daemon=True)
     t.start()
-    logger.info("Bot thread started ✓")
-
-    # Start Flask (main thread — Render binds to PORT)
     logger.info(f"Flask starting on port {PORT}")
-    app.run(host="0.0.0.0", port=PORT, threaded=True)
+    flask_app.run(host="0.0.0.0", port=PORT, threaded=True)
