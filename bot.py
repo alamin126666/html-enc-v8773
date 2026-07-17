@@ -31,7 +31,34 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ─── Flask health server ───────────────────────────────
+# ─── AES Challenge Solver ──────────────────────────────
+def _solve_aes_challenge(html: str):
+    """
+    Detect & solve slowAES.decrypt() cookie challenge.
+    var a=KEY, b=IV, c=CIPHERTEXT → AES-CBC decrypt → __test cookie
+    Returns (cookie_value, redirect_url) or None if not a challenge page.
+    """
+    if "slowAES.decrypt" not in html:
+        return None
+    import re
+    try:
+        a    = re.search(r'var a=toNumbers\("([0-9a-f]+)"\)', html).group(1)
+        b    = re.search(r'var b=toNumbers\("([0-9a-f]+)"\)', html).group(1)
+        c    = re.search(r'var c=toNumbers\("([0-9a-f]+)"\)', html).group(1)
+        href = re.search(r'location\.href=["\']([^"\']+)["\']', html).group(1)
+    except AttributeError:
+        return None
+    try:
+        from Crypto.Cipher import AES as _AES
+        key      = bytes.fromhex(a)
+        iv_bytes = bytes.fromhex(b)
+        ct       = bytes.fromhex(c)
+        decrypted = _AES.new(key, _AES.MODE_CBC, iv_bytes).decrypt(ct)
+        logger.info(f"AES challenge solved → cookie: {decrypted.hex()[:16]}...")
+        return decrypted.hex(), href
+    except Exception as e:
+        logger.warning(f"AES solve failed: {e}")
+        return None
 flask_app = Flask(__name__)
 
 @flask_app.route("/")
@@ -209,20 +236,42 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tmp_path = None
 
     try:
+        _hdrs = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ),
+            "Accept": "text/html,application/xhtml+xml,*/*;q=0.9",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+
+        # ── Step 1: Initial fetch ───────────────────────────
         async with httpx.AsyncClient(
-            timeout=30,
-            follow_redirects=True,
-            headers={
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Safari/537.36"
-                )
-            },
+            timeout=30, follow_redirects=True, headers=_hdrs
         ) as client:
             resp = await client.get(url)
 
-        html   = resp.text
+        html = resp.text
+
+        # ── Step 2: AES Challenge Detection & Solve ─────────
+        challenge = _solve_aes_challenge(html)
+        if challenge:
+            cookie_val, redirect_url = challenge
+            await msg.edit_text(
+                "🔓 AES challenge detected — cookie solve করছি..."
+            )
+            logger.info(f"AES solved → retrying {redirect_url}")
+
+            async with httpx.AsyncClient(
+                timeout=30, follow_redirects=True, headers=_hdrs,
+                cookies={"__test": cookie_val}
+            ) as client:
+                resp = await client.get(redirect_url)
+
+            html = resp.text
+            url  = redirect_url   # update for caption
+
         domain = url.replace("https://", "").replace("http://", "").split("/")[0]
         fname  = f"{domain}.html"
 
