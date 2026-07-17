@@ -191,7 +191,7 @@ async def handle_doc(update: Update, context: ContextTypes.DEFAULT_TYPE):
         with open(tmp_out, "rb") as f:
             await update.message.reply_document(
                 document=f,
-                filename=f"protected_{fname}",
+                filename=f"{fname.rsplit(".", 1)[0]}_obf.html",
                 caption=(
                     "✅ <b>4-Layer Protection সম্পন্ন!</b>\n\n"
                     "🔒 Layer 1 — Minify + RC4 Obfuscate ✓\n"
